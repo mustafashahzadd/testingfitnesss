@@ -1,151 +1,79 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+from dotenv import load_dotenv
+import os
+from groq import Groq
+import groq
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# env_path = os.path.join("groq_env", ".env")
+# load_dotenv(env_path)  # Load environment variables from groq_env/.env
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# # Retrieve API Key from environment variable
+# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+load_dotenv()  # This assumes .env is in the root directory
+api_key = os.getenv("GROQ_API_KEY")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Initialize Groq Client
+client = groq.Groq(api_key=api_key)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+# ---------- step 2 FUNCTION TO GENERATE PLAN ---------- #
+def generate_fitness_plan(goal, height, weight):
+    prompt = f"""
+Create a personalized and detailed **fitness and diet plan** for someone who wants to {goal}, is {height} cm tall, and weighs {weight} kg.
+
+**Diet Plan Instructions:**
+- Include meals for breakfast, lunch, and dinner.
+- Provide a **nutritional breakdown** including approximate daily intake of:
+  - Protein (grams)
+  - Calcium (mg)
+  - Fiber (grams)
+  - Carbs and Fats (optional but preferred)
+- Recommend water intake as well.
+- Present the diet plan in **tabular format** for clarity.
+
+**Exercise Plan Instructions:**
+- Provide a **3-day muscle-based split** workout plan:
+  - Day 1: Core + Chest
+  - Day 2: Back + Legs
+  - Day 3: Shoulders + Biceps + Triceps
+- Each day should include 4–5 exercises with reps and sets.
+- Present the workout schedule in **table format** as well.
+
+Keep everything beginner-friendly and easy to follow.
+"""
+
+
+    completion = client.chat.completions.create(
+
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+        temperature=1,
+        max_tokens=1024,
+        top_p=1,
+        stream=True,
+        stop=None,
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    response = ""
+    for chunk in completion:
+        content = chunk.choices[0].delta.content
+        if content:
+            response += content
+    return response
 
-    return gdp_df
+# ---------- 🖥️ STREAMLIT UI ---------- #
+st.title("💪 AI Fitness Plan Generator (Groq - LLaMA 4)")
 
-gdp_df = get_gdp_data()
+goal = st.selectbox("What's your goal?", ["Lose Weight", "Gain Muscle", "Stay Fit"])
+height = st.number_input("Enter your height (cm):", min_value=100, max_value=250)
+weight = st.number_input("Enter your weight (kg):", min_value=30, max_value=200)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+if st.button("Generate Plan"):
+    with st.spinner("Generating your personalized plan..."):
+        plan = generate_fitness_plan(goal, height, weight)
+        st.success("Here’s your fitness plan:")
+        st.markdown(plan)
